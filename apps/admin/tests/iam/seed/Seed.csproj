@@ -1,4 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <!-- Backend lives in its own repository: pass -p:BackendRoot=<backend repo>/backend (run-iam-e2e.ps1 does this). -->
   <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>
-  <ItemGroup><ProjectReference Include="../../../../../backend/src/TeaPremium.Infrastructure/TeaPremium.Infrastructure.csproj" /></ItemGroup>
+  <Target Name="RequireBackendRoot" BeforeTargets="CollectPackageReferences;ResolveProjectReferences">
+    <Error Condition="'$(BackendRoot)' == '' Or !Exists('$(BackendRoot)/src/TeaPremium.Infrastructure/TeaPremium.Infrastructure.csproj')"
+           Text="Set -p:BackendRoot to the backend folder of the backend repository (contains src/TeaPremium.Infrastructure)." />
+  </Target>
+  <ItemGroup><ProjectReference Include="$(BackendRoot)/src/TeaPremium.Infrastructure/TeaPremium.Infrastructure.csproj" /></ItemGroup>
 </Project>

@@ -6,7 +6,7 @@ Spec-first rebuild of **Trà Hiên**. This repository is independent from prior 
 
 ## Getting started
 
-For the P0-02 four-service local development setup, see [infra/README.md](infra/README.md).
+This repository is **frontend only**. For running Store/Admin against the separate backend, see [infra/README.md](infra/README.md).
 
 1. Clone: `git clone https://github.com/jimthanhnobi/tra-hien.git`
 2. Add or replace your authoritative Markdown specs under `docs/spec/` and preserve filenames, hierarchy, and links. Commit/push to `main` or use a separate documentation branch and PR as you prefer. No repository-guard script or Actions workflow is required to push specs.
@@ -42,25 +42,32 @@ Evaluate [GitHub Spec Kit](https://github.com/github/spec-kit) for optional spec
 
 See [docs/WORKFLOW.md](docs/WORKFLOW.md) for exact operating steps.
 
-## CI và sinh hợp đồng API (P0-11)
+## Repo này chỉ chứa Frontend
 
-CI chạy trên PR vào `main`, push `main` và `feature/**`. Ba status check là
-`Backend and API contract`, `Frontend verification`, `Docker regression builds`.
-Docker phải hoạt động để chạy fixture Testcontainers PostgreSQL 17 hiện có.
+Repo gồm `apps/store`, `apps/admin` (Next.js) và `packages/api-client`. **Backend (.NET API +
+PostgreSQL + migration) nằm ở repo riêng**; chạy BE trước theo README của repo đó
+(mặc định API ở `http://localhost:8080`, OpenAPI Development ở `/openapi/v1.json`).
 
-Từ root, dùng SDK trong `global.json`, Node 22.22.2 và pnpm trong `packageManager`:
+## CI và sinh hợp đồng API
+
+CI chạy trên PR vào `main` và push `main`. Hai status check: `Frontend verification`,
+`Docker regression builds`. Từ root, dùng Node 22.22.2 và pnpm trong `packageManager`:
 
 ```powershell
-dotnet restore backend/TeaPremium.sln --locked-mode
-dotnet build backend/TeaPremium.sln --no-restore -warnaserror
 corepack pnpm install --frozen-lockfile
-corepack pnpm generate:api
-corepack pnpm check:api
-./scripts/migrations.ps1
+corepack pnpm lint
+corepack pnpm typecheck
+corepack pnpm test
+corepack pnpm build
 ```
 
-Commit cả `packages/api-client/openapi.json` và `src/generated/schema.ts` khi API đổi.
-Generation dùng entrypoint API với mock server của tooling .NET, không cần DB/secret;
-không ghi đè `src/index.ts`. OpenAPI runtime chỉ bật trong Development/CI.
-SQL ở `artifacts/migrations.sql` chỉ được sinh để review, không được tự áp dụng.
-Lệnh kiểm đầy đủ, kết quả và giới hạn: [hồ sơ P0-11](docs/plans/p0-11-implementation.md).
+Khi BE đổi API, với BE đang chạy:
+
+```powershell
+corepack pnpm generate:api   # đọc OPENAPI_URL, mặc định http://localhost:8080/openapi/v1.json
+corepack pnpm check:api      # báo lỗi nếu openapi.json/schema.ts đã commit lệch với BE
+```
+
+Có thể dùng file đã lưu thay vì BE đang chạy: `$env:OPENAPI_FILE = "duong/dan/openapi.json"`.
+Commit cả `packages/api-client/openapi.json` và `src/generated/schema.ts` khi API đổi;
+không ghi đè `src/index.ts`.

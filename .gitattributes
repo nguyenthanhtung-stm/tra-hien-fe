@@ -1,8 +1,6 @@
 /.gitattributes text eol=lf
-/backend/** text eol=lf
 /apps/** text eol=lf
 /packages/** text eol=lf
-/global.json text eol=lf
 /package.json text eol=lf
 /pnpm-workspace.yaml text eol=lf
 /pnpm-lock.yaml text eol=lf
@@ -10,4 +8,3 @@
 /.dockerignore text eol=lf
 /infra/** text=auto eol=lf
 /docs/plans/p0-02-implementation.md text eol=lf
-/backend/tests/TeaPremium.IntegrationTests/Fixtures/v5.2.0/*.gz binary

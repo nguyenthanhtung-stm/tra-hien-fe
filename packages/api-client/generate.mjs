@@ -1,29 +1,26 @@
-import { spawnSync } from "node:child_process";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import path from "node:path";
 import openapiTS, { astToString } from "openapi-typescript";
 import ts from "typescript";
 
-const root = fileURLToPath(new URL("../../", import.meta.url));
-const output = path.join(root, "artifacts/openapi");
-await mkdir(output, { recursive: true });
-const source = path.join(output, "openapi.json");
-await rm(source, { force: true });
-// MSBuild caches the file list rather than the JSON output; force regeneration on every check.
-await rm(path.join(root, "backend/src/TeaPremium.Api/obj/TeaPremium.Api.OpenApiFiles.cache"), { force: true });
-const result = spawnSync("dotnet", [
-  "build", "backend/src/TeaPremium.Api", "--no-restore", "-warnaserror",
-  "-p:OpenApiGenerateDocuments=true", `-p:OpenApiDocumentsDirectory=${output}`,
-], {
-  cwd: root, stdio: "inherit",
-  // Contract generation must never inherit a developer's database connection.
-  env: { ...process.env, ASPNETCORE_ENVIRONMENT: "CI", ConnectionStrings__Default: "" },
-});
-if (result.error) throw result.error;
-if (result.status !== 0) process.exit(result.status ?? 1);
-
-const document = JSON.parse(await readFile(source, "utf8"));
+// The backend lives in its own repository. Read the contract from a running API
+// (Development exposes /openapi/v1.json) or from a saved file via OPENAPI_FILE.
+const openapiUrl = process.env.OPENAPI_URL ?? "http://localhost:8080/openapi/v1.json";
+let document;
+if (process.env.OPENAPI_FILE) {
+  document = JSON.parse(await readFile(process.env.OPENAPI_FILE, "utf8"));
+} else {
+  let response;
+  try {
+    response = await fetch(openapiUrl, { headers: { Accept: "application/json" } });
+  } catch (error) {
+    throw new Error(`Cannot reach backend OpenAPI at ${openapiUrl}. Start the backend or set OPENAPI_URL/OPENAPI_FILE.`, { cause: error });
+  }
+  if (!response.ok) throw new Error(`Backend OpenAPI ${openapiUrl} returned HTTP ${response.status}.`);
+  document = await response.json();
+}
+// A running API adds its own host to "servers"; drop it so output does not depend on where BE runs.
+delete document.servers;
 if (!document.openapi?.startsWith("3.") || !document.paths || !document.info) {
   throw new Error("API did not generate a valid OpenAPI contract");
 }

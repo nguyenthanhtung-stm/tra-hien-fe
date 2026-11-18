@@ -1,51 +1,10 @@
-name: teapremium-dev
+name: teapremium-fe
+
+# Frontend only. Start the backend (PostgreSQL + API) from the backend repository first.
+# Store reaches it through API_INTERNAL_URL (default: the host's port 8080).
+# Admin calls /api/v1/* same-origin through Caddy (DEC-16); see infra/README.md.
 
 services:
-  postgres:
-    image: postgres:17
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:?Copy infra/.env.example to infra/.env and set POSTGRES_USER}
-      POSTGRES_DB: ${POSTGRES_DB:?Copy infra/.env.example to infra/.env and set POSTGRES_DB}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Copy infra/.env.example to infra/.env and set POSTGRES_PASSWORD}
-    ports:
-      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
-      interval: 5s
-      timeout: 3s
-      retries: 12
-
-  api:
-    build:
-      context: ..
-      dockerfile: infra/Dockerfile.api
-    environment:
-      ASPNETCORE_ENVIRONMENT: Development
-      ASPNETCORE_HTTP_PORTS: "8080"
-      DOTNET_USE_POLLING_FILE_WATCHER: "1"
-      DOTNET_WATCH_SUPPRESS_STATIC_FILE_HANDLING: "1"
-      DOTNET_WATCH_RESTART_ON_RUDE_EDIT: "1"
-      # Development-only: .NET reads ConnectionStrings:Default from environment.
-      # Dev password constraint: POSTGRES_PASSWORD must not contain the double-quote character (").
-      # Semicolons are supported. See infra/README.md; do not print expanded config with secrets.
-      ConnectionStrings__Default: "Host=postgres;Port=5432;Database=${POSTGRES_DB:?POSTGRES_DB is required};Username=${POSTGRES_USER:?POSTGRES_USER is required};Password=\"${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}\""
-    ports:
-      - "127.0.0.1:${API_PORT:-8080}:8080"
-    depends_on:
-      postgres:
-        condition: service_healthy
-    develop:
-      watch:
-        - action: sync
-          path: ../backend
-          target: /workspace/backend
-          initial_sync: true
-          ignore:
-            - "**/bin/"
-            - "**/obj/"
-
   store:
     build:
       context: ..
@@ -53,9 +12,11 @@ services:
       args:
         APP: store
     environment:
-      API_INTERNAL_URL: http://api:8080
+      API_INTERNAL_URL: ${API_INTERNAL_URL:-http://host.docker.internal:8080}
       PORT: "3000"
       NEXT_TELEMETRY_DISABLED: "1"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "127.0.0.1:${STORE_PORT:-3000}:3000"
     develop:
@@ -68,9 +29,6 @@ services:
           path: ../packages/api-client/src
           target: /workspace/packages/api-client/src
           initial_sync: true
-    depends_on:
-      api:
-        condition: service_started
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
@@ -84,7 +42,6 @@ services:
       args:
         APP: admin
     environment:
-      API_INTERNAL_URL: http://api:8080
       PORT: "3001"
       NEXT_TELEMETRY_DISABLED: "1"
     ports:
@@ -99,14 +56,8 @@ services:
           path: ../packages/api-client/src
           target: /workspace/packages/api-client/src
           initial_sync: true
-    depends_on:
-      api:
-        condition: service_started
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 12
-
-volumes:
-  pgdata:

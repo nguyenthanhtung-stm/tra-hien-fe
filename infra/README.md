@@ -1,76 +1,71 @@
-# Chạy Trà Hiên V2 trên máy phát triển
+# Chạy Frontend Trà Hiên V2 trên máy phát triển
 
-`compose.dev.yml` chạy PostgreSQL 17, API .NET 10, Store và Admin Next.js. Chỉ dùng dữ liệu thử. Đây là cấu hình **development**. Migration **phải áp dụng riêng**, không tự chạy khi API khởi động. IAM P0-08 và Admin shell P0-12 yêu cầu HTTPS; Compose HTTP hiện tại chưa đủ cho đăng nhập. Hướng dẫn native Caddy cùng origin, trusted proxy, certificate và kiểm thử thật nằm trong [hồ sơ P0-12](../docs/plans/p0-12-implementation.md). Backup/triển khai production thuộc giai đoạn sau.
+Repo này chỉ có Store và Admin (Next.js). **Backend chạy từ repo BE riêng**: PostgreSQL, migration,
+API .NET đều dựng theo `infra/README.md` của repo BE. Chạy BE trước, kiểm tra
+`http://localhost:8080/openapi/v1.json` trả JSON rồi mới chạy FE.
 
-## Chuẩn bị trên Windows PowerShell
+## Cách 1: chạy trực tiếp bằng pnpm (khuyên dùng khi code FE)
 
-Cài Docker Desktop với Linux containers và Docker Compose; kiểm tra `docker version` và `docker compose version`. Từ gốc repository:
+Từ gốc repo, Node 22.22.2:
 
 ```powershell
-if (-not (Test-Path -LiteralPath infra/.env)) {
-  Copy-Item -LiteralPath infra/.env.example -Destination infra/.env
-}
-notepad infra/.env
-docker compose -f infra/compose.dev.yml config --quiet
+corepack pnpm install --frozen-lockfile
+$env:API_INTERNAL_URL = "http://localhost:8080"   # Store rewrite /api/* sang BE
+corepack pnpm --dir apps/store exec next dev --port 3000
+# Terminal khác:
+corepack pnpm --dir apps/admin exec next dev --port 3001
 ```
 
-Đổi `POSTGRES_PASSWORD` thành mật khẩu chỉ dùng cho máy này trước khi khởi động. `infra/.env` được `.gitignore` bỏ qua. Dùng `config --quiet` để không in mật khẩu ra terminal. Không đưa dữ liệu khách thật vào DB dev. Nếu đã có `infra/.env`, lệnh trên giữ nguyên file đó; chỉ cập nhật các biến cần thiết.
+## Cách 2: Docker Compose
 
-| Biến trong `infra/.env` | Mặc định trong ví dụ | Vai trò |
+```powershell
+if (-not (Test-Path -LiteralPath infra/.env)) { Copy-Item infra/.env.example infra/.env }
+docker compose -f infra/compose.dev.yml up -d --build
+docker compose -f infra/compose.dev.yml watch   # hot reload, terminal riêng
+```
+
+| Biến trong `infra/.env` | Mặc định | Vai trò |
 |---|---|---|
-| `POSTGRES_USER` / `POSTGRES_DB` | `teapremium_dev` | Tài khoản và database local. |
-| `POSTGRES_PASSWORD` | placeholder cần thay | Mật khẩu local; Compose yêu cầu giá trị không rỗng. |
-| `POSTGRES_PORT` | `5432` | Cổng PostgreSQL trên máy host. |
-| `API_PORT` | `8080` | Cổng API trên máy host. |
-| `STORE_PORT` / `ADMIN_PORT` | `3000` / `3001` | Cổng hai app trên máy host. |
+| `API_INTERNAL_URL` | `http://host.docker.internal:8080` | Địa chỉ BE nhìn từ container Store. |
+| `STORE_PORT` / `ADMIN_PORT` | `3000` / `3001` | Cổng host của hai app. |
 
-**Kết nối API tới PostgreSQL:** Compose nội suy `POSTGRES_USER`, `POSTGRES_DB`, `POSTGRES_PASSWORD` từ `infra/.env` vào biến môi trường `ConnectionStrings__Default` của container API, dùng `Host=postgres;Port=5432`. ASP.NET Core đọc thành `ConnectionStrings:Default`, theo `PersistenceRegistration.cs`. Mật khẩu được đặt trong dấu nháy kép của connection string để chứa được dấu `;`; **quy ước development: `POSTGRES_PASSWORD` không được chứa dấu nháy kép `"`**. Giá trị có dấu `;` được hỗ trợ; không dùng cách thêm `\` hay nhân đôi `"` để né giới hạn này vì có thể làm mật khẩu API khác mật khẩu PostgreSQL đã khởi tạo. Nếu `.env` hiện chứa `"`, hãy chọn mật khẩu dev khác và đồng bộ mật khẩu của role trong DB hiện hữu (đổi `.env` không tự thay mật khẩu đã lưu trong volume PostgreSQL). Không in đầu ra `docker compose config` (không có `--quiet`) hoặc `docker inspect` để chia sẻ vì chúng có thể lộ mật khẩu. Compose chỉ cung cấp cấu hình, **không tự tạo schema/migrate**; áp migration P0-04 lên DB dev dùng EF CLI riêng theo hướng dẫn `docs/plans/p0-04-implementation.md`, không chạy `Migrate`/`EnsureCreated` từ API.
+Compose project tên `teapremium-fe`, không đụng container của repo BE. Nếu repo BE cũng đang
+chạy Store/Admin của nó trên cùng cổng, dừng chúng hoặc đổi cổng trong `.env`.
 
-Các cổng chỉ bind vào `127.0.0.1`. Nếu cổng đã bị chiếm, đổi cổng host tương ứng trong `infra/.env`; cổng **trong container** vẫn là PostgreSQL `5432`, API `8080`, Store `3000`, Admin `3001`. Docker DNS dùng tên `postgres` và `api`, không dùng `localhost` để kết nối giữa container.
+## Admin và đăng nhập
 
-## Build, chạy và kiểm tra
+Admin gọi `/api/v1/*` **cùng origin** (DEC-16), không có rewrite Next. Mở thẳng
+`http://localhost:3001` chỉ thấy khung giao diện và lỗi "Không thể kết nối" vì `/api` rơi vào Next (404).
+BE cũng từ chối đăng nhập qua HTTP (`https_required`, cookie Secure).
 
-```powershell
-docker compose -f infra/compose.dev.yml build
-docker compose -f infra/compose.dev.yml up -d
-docker compose -f infra/compose.dev.yml ps
-docker compose -f infra/compose.dev.yml logs -f postgres api store admin
-```
-
-Mở `http://localhost:3000/` cho Store và `http://localhost:3001/` cho Admin. API ở `http://localhost:8080/`; P0-01 chưa đăng ký endpoint nên HTTP `404` tại `/` là bình thường, nhưng container phải lắng nghe và log không có lỗi khởi động. Kiểm tra PostgreSQL bằng:
+Để đăng nhập, chạy Caddy theo `infra/caddy/Caddyfile.admin-local`:
+`https://admin.localhost:8443` → `/api/*` sang API loopback **5080**, còn lại sang Admin **3001**.
+API phải lắng nghe ở 5080 (repo BE: chạy native `--urls http://127.0.0.1:5080`, hoặc Compose đặt
+`API_PORT=5080`) và cấu hình `Iam__AdminHost`/trusted proxy theo README của repo BE. Tài khoản
+chủ đầu tiên tạo bằng lệnh `bootstrap-owner` của BE.
 
 ```powershell
-docker compose -f infra/compose.dev.yml exec postgres pg_isready -U teapremium_dev -d teapremium_dev
-docker compose -f infra/compose.dev.yml exec -T postgres psql -U teapremium_dev -d teapremium_dev -tAc "SELECT 1;"
+caddy run --config infra/caddy/Caddyfile.admin-local --adapter caddyfile
 ```
 
-`SELECT 1` xác nhận PostgreSQL có thể truy vấn, **không** chứng minh API đã truy cập DB. P0-06 phải kiểm thử thực tế đường kết nối của dispatcher khi background worker được đăng ký. Nếu đổi thông tin đăng nhập trên `infra/.env` mà vẫn giữ volume cũ, PostgreSQL **không tự đổi** user/password/database đã khởi tạo.
+Operator tự xác minh và tin cậy root CA của Caddy (`artifacts/p0-12-local/caddy-data`) trước khi mở trình duyệt.
 
-Store giữ rewrite development tới `API_INTERNAL_URL=http://api:8080`. Admin gọi `/api/v1/*` qua Caddy trực tiếp tới API (DEC-16), đã bỏ Next rewrite để giữ HTTPS và trusted proxy rõ ràng. Biến `API_INTERNAL_URL` cũ trong service Admin không còn được app sử dụng. Truy cập Admin bằng HTTP chỉ xem được loading/lỗi kết nối; không thể đăng nhập bằng Secure cookie. Compose chỉ chờ process API khởi động; `ps` và log xác nhận API. Store/Admin có health check HTTP cho `/`.
+## E2E đăng nhập Admin (IAM) với BE thật
 
-`up -d` chạy source đã đóng gói trong image. Để bật hot reload cho API, Store và Admin, mở PowerShell khác từ gốc repo và chạy:
+Một lệnh dựng môi trường thử riêng bằng Docker (mạng riêng, PostgreSQL 17 mới có phân quyền `tp_*`
+theo repo BE, seed owner ngẫu nhiên, API **Production**, Caddy TLS cổng 9443), chạy
+`tests/iam/onboarding.spec.ts` rồi dọn sạch container và bí mật. Không đụng DB dev hay Caddy dev.
+Cần Admin đang chạy ở cổng 3001 của máy (dev server hoặc compose FE):
 
 ```powershell
-docker compose -f infra/compose.dev.yml watch
+powershell -File apps/admin/tests/iam/run-iam-e2e.ps1 -BackendRepo D:\duong\dan\repo-be
 ```
 
-Compose Watch đồng bộ `backend/` (bỏ qua `bin/obj` của host), `apps/*/src` và `packages/api-client/src` vào container; `dotnet watch` và Next.js dev server áp dụng thay đổi. API đặt `DOTNET_WATCH_SUPPRESS_STATIC_FILE_HANDLING=1` vì scaffold không dùng static assets, tránh lỗi đường dẫn `staticwebassets.development.json` của .NET watch trên POSIX. `DOTNET_WATCH_RESTART_ON_RUDE_EDIT=1` tự restart API khi thay đổi C# không thể hot reload, tránh prompt trong container detached. Giữ terminal watch mở khi sửa source. Khi sửa manifest, Dockerfile, `next.config.ts` hoặc dependency, chạy lại `build` rồi `up -d`. Docker Desktop trên Windows cần quyền chia sẻ ổ đĩa chứa repository.
+Tham số: `-Port` (mặc định 9443), `-AdminUpstream` (mặc định `host.docker.internal:3001`),
+`-KeepEnvironment` để giữ môi trường khi cần điều tra (thư mục `artifacts/iam-e2e` chứa bí mật, xóa sau khi xong).
+Seed `.NET` tham chiếu source BE qua `-p:BackendRoot=<repo-be>/backend`; script tự truyền.
 
-## Dừng, khởi động lại, reset
+## Đổi API
 
-```powershell
-docker compose -f infra/compose.dev.yml stop
-docker compose -f infra/compose.dev.yml start
-docker compose -f infra/compose.dev.yml down
-```
-
-`down` dừng và bỏ container/network nhưng **giữ** volume `teapremium-dev_pgdata`; `up -d` sau đó dùng lại DB. Muốn reset ứng dụng mà giữ DB, dùng `down`, `build`, `up -d`. **Xóa DB dev là thao tác mất dữ liệu**: chỉ sau khi xác nhận không còn dữ liệu cần giữ, chạy `docker compose -f infra/compose.dev.yml down -v`, rồi `up -d` để tạo volume mới. Không chạy lệnh này trên dữ liệu thật.
-
-## Khi có lỗi
-
-- `config` báo thiếu biến: kiểm tra `infra/.env` ở cạnh compose file, nhất là `POSTGRES_PASSWORD`.
-- Cổng host bị chiếm: đổi `*_PORT` trong `infra/.env` và chạy `up -d` lại.
-- PostgreSQL chưa healthy: xem `docker compose -f infra/compose.dev.yml logs postgres`; với volume cũ, đổi `POSTGRES_USER/DB/PASSWORD` trong `.env` không đổi thông tin đã tạo trong DB.
-- API chưa lên: xem `logs api`; phải có SDK .NET 10.0.404 trong Docker image build và các NuGet package restore theo lockfile. Lỗi `staticwebassets.development.json` trong `dotnet watch` có thể do đường dẫn POSIX của SDK, không chứng minh build API thất bại; Compose tắt riêng static-file handling vì P0-01 chưa có static assets.
-- Store/Admin lỗi module hoặc proxy: `build` lại sau khi đổi package/config; kiểm `API_INTERNAL_URL=http://api:8080` trong container. Không dùng `localhost:8080` trong cấu hình container.
-- Hot reload không nhận file: xác nhận Docker Desktop đã chia sẻ thư mục dự án và lệnh `docker compose -f infra/compose.dev.yml watch` đang chạy trong terminal riêng. Dùng `up -d --build` nếu sửa ngoài các source path được đồng bộ.
+Khi BE thêm/sửa endpoint: chạy BE, rồi `corepack pnpm generate:api` để cập nhật
+`packages/api-client/openapi.json` và `src/generated/schema.ts`; `corepack pnpm check:api` kiểm lệch.
